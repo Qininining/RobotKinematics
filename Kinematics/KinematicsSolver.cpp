@@ -368,3 +368,72 @@ cv::Matx44d KinematicsSolver::computeFK(const std::vector<double>& q_angles) { /
         throw ComputationFailedException("在 computeFK 中发生标准库错误: " + std::string(std_e.what()));
     }
 }
+
+// 计算关节速度以实现期望的末端执行器空间速度
+std::vector<double> KinematicsSolver::computeJointVelocities(
+    const cv::Vec6d& V_s_desired,
+    const std::vector<double>& q_current)
+{
+    size_t num_joints = screw_vectors_space_.size();
+    if (q_current.size() != num_joints) {
+        throw InvalidInputException("computeJointVelocities 中当前关节角数量 (" + std::to_string(q_current.size()) +
+                                    ") 与螺旋向量数量 (" + std::to_string(num_joints) + ") 不匹配。");
+    }
+
+    if (num_joints == 0) {
+        // 如果没有关节，只有当期望速度（旋量）的范数接近零时才合理
+        if (cv::norm(V_s_desired) < 1e-9) {
+            return {}; // 没有关节，关节速度向量为空
+        } else {
+            throw ComputationFailedException("computeJointVelocities: 无关节，但期望的末端执行器速度不为零。");
+        }
+    }
+
+    try {
+        // 1. 计算当前关节角度下的空间雅可比矩阵 J_s(q)
+        cv::Mat J_s = computeJacobianSpace(q_current);
+
+        // 2. 求解 J_s * q_dot = V_s_desired  =>  q_dot = J_s_pinv * V_s_desired
+        cv::Mat q_dot_mat;
+        // 将 V_s_desired (cv::Vec6d) 转换为 cv::Mat (6x1)
+        cv::Mat V_s_desired_mat(6, 1, CV_64F);
+        for (int i = 0; i < 6; ++i) {
+            V_s_desired_mat.at<double>(i, 0) = V_s_desired(i);
+        }
+
+        // 使用 SVD 分解求解（等效于使用伪逆 J_s_pinv = (J_s^T * J_s)^-1 * J_s^T）
+        // cv::solve 对于非方阵或奇异矩阵会计算伪逆解
+        if (!cv::solve(J_s, V_s_desired_mat, q_dot_mat, cv::DECOMP_SVD)) {
+            throw ComputationFailedException("computeJointVelocities: 雅可比矩阵求解失败 (cv::solve 使用 DECOMP_SVD)。");
+        }
+
+        // 检查 q_dot_mat 的维度是否符合预期 (num_joints x 1)
+        if (q_dot_mat.rows != static_cast<int>(num_joints) || q_dot_mat.cols != 1) {
+             throw ComputationFailedException("computeJointVelocities: 计算得到的关节速度 q_dot 维度错误。期望 " +
+                                              std::to_string(num_joints) + "x1, 得到 " +
+                                              std::to_string(q_dot_mat.rows) + "x" + std::to_string(q_dot_mat.cols));
+        }
+
+        // 3. 将结果从 cv::Mat 转换为 std::vector<double>
+        std::vector<double> q_dot(num_joints);
+        for (size_t i = 0; i < num_joints; ++i) {
+            q_dot[i] = q_dot_mat.at<double>(static_cast<int>(i), 0);
+        }
+
+        return q_dot;
+
+    } catch (const InvalidInputException& e) {
+        // 由 computeJacobianSpace 抛出，直接重新抛出
+        throw;
+    } catch (const cv::Exception& cv_e) {
+        // 捕获 OpenCV 相关的异常
+        throw ComputationFailedException("在 computeJointVelocities 中发生 OpenCV 错误: " + std::string(cv_e.what()));
+    } catch (const std::exception& std_e) {
+        // 捕获其他标准异常，例如来自 new 的 bad_alloc
+        // 检查是否已经是我们自定义的异常类型，避免重复包装或丢失原始信息
+        if (dynamic_cast<const ComputationFailedException*>(&std_e) || dynamic_cast<const InvalidInputException*>(&std_e)) {
+            throw; // 如果是已定义的自定义异常，则重新抛出
+        }
+        throw ComputationFailedException("在 computeJointVelocities 中发生标准库错误: " + std::string(std_e.what()));
+    }
+}

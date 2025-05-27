@@ -65,6 +65,19 @@ public:
         double tolerance = 1e-6,
         int max_iterations = 100);
 
+    /**
+     * @brief 计算关节速度以实现期望的末端执行器空间速度。
+     *        该方法求解 V_s = J_s(q) * q_dot 中的 q_dot。
+     * @param V_s_desired 期望的末端执行器空间速度 (6D 旋量: omega_x, omega_y, omega_z, v_x, v_y, v_z)。
+     * @param q_current 当前的关节角度向量。
+     * @return 计算得到的关节速度向量 (q_dot)。
+     * @throws InvalidInputException 如果 q_current 的大小与螺旋向量数量不匹配。
+     * @throws ComputationFailedException 如果雅可比矩阵求解失败或无关节但期望速度非零。
+     */
+    std::vector<double> computeJointVelocities(
+        const cv::Vec6d& V_s_desired,
+        const std::vector<double>& q_current);
+
 private:
     std::vector<cv::Vec6d> screw_vectors_space_; ///< 存储空间系下的螺旋向量
     cv::Matx44d M_initial_;                     ///< 初始位姿矩阵
