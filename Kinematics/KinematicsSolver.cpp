@@ -218,10 +218,10 @@ cv::Mat KinematicsSolver::computeJacobianSpace(const std::vector<double>& q) {
             // T_product_upto_prev is already exp(S1 q1)...exp(S(i-1)q(i-1))
             cv::Matx66d Adj_T_prod = adjoint(T_product_upto_prev);
             
-            cv::Matx<double, 6, 1> S_i_base_mat;
-            for(int k=0; k<6; ++k) S_i_base_mat(k,0) = S_i_base(k);
-            
-            cv::Matx<double, 6, 1> J_col_i_mat = Adj_T_prod * S_i_base_mat;
+            // cv::Matx<double, 6, 1> S_i_base_mat;
+            // for(int k=0; k<6; ++k) S_i_base_mat(k,0) = S_i_base(k);
+            // cv::Matx<double, 6, 1> J_col_i_mat = Adj_T_prod * S_i_base_mat;
+            cv::Matx<double, 6, 1> J_col_i_mat = Adj_T_prod * cv::Matx<double, 6, 1>(S_i_base.val);
             for(int k=0; k<6; ++k) J_col_i_vec(k) = J_col_i_mat(k,0);
         }
 
@@ -241,7 +241,10 @@ std::vector<double> KinematicsSolver::computeIK(
     const cv::Matx44d& T_target,
     const std::vector<double>& q_initial_guess,
     double tolerance,
-    int max_iterations)
+    int max_iterations,
+    const std::vector<std::pair<double, double>>& joint_limits, // 新增：关节限位
+    double lambda                                               // 新增：DLS阻尼因子
+)
 {
     auto start_time = std::chrono::high_resolution_clock::now(); // Start timer
 
@@ -250,6 +253,12 @@ std::vector<double> KinematicsSolver::computeIK(
         throw InvalidInputException("IK initial joint guess count (" + std::to_string(q_initial_guess.size()) +
                                     ") does not match screw vector count (" + std::to_string(num_joints) + ").");
     }
+    // 检查关节限位参数的有效性
+    if (!joint_limits.empty() && joint_limits.size() != num_joints) {
+        throw InvalidInputException("IK joint_limits size (" + std::to_string(joint_limits.size()) +
+                                    ") does not match screw vector count (" + std::to_string(num_joints) + ").");
+    }
+
     if (num_joints == 0) {
         if (T_target == M_initial_) {
             auto end_time = std::chrono::high_resolution_clock::now();
@@ -273,6 +282,7 @@ std::vector<double> KinematicsSolver::computeIK(
     // std::cout << "Starting Inverse Kinematics (IK):" << std::endl;
     // std::cout << "  Target Tolerance: " << tolerance << std::endl;
     // std::cout << "  Max Iterations: " << max_iterations << std::endl;
+    // std::cout << "  Damping Factor (lambda): " << lambda << std::endl; // Log lambda
     // std::cout << "  Initial Joint Angles q_initial: [";
     // for (size_t i = 0; i < q.size(); ++i) {
     //     std::cout << q[i] << (i == q.size() - 1 ? "" : ", ");
@@ -313,13 +323,18 @@ std::vector<double> KinematicsSolver::computeIK(
         cv::Mat J_s = computeJacobianSpace(q); // Jacobian of ProductOfExponentials(q)
         
         cv::Mat delta_q_mat;
-        // Solve J_s * delta_q = V_s_error using pseudo-inverse
-        // OpenCV's solve with DECOMP_SVD computes pseudo-inverse if J_s is not square or singular
-        if (!cv::solve(J_s, cv::Mat(V_s_error), delta_q_mat, cv::DECOMP_SVD)) {
+        
+        // 使用Damped Least Squares (DLS)求解: (J_s^T * J_s + lambda^2 * I) * delta_q = J_s^T * V_s_error
+        double lambda_sq = lambda * lambda;
+        cv::Mat J_s_T = J_s.t();
+        cv::Mat A_dls = J_s_T * J_s + lambda_sq * cv::Mat::eye(static_cast<int>(num_joints), static_cast<int>(num_joints), CV_64F);
+        cv::Mat B_dls = J_s_T * cv::Mat(V_s_error);
+
+        if (!cv::solve(A_dls, B_dls, delta_q_mat, cv::DECOMP_SVD)) { // 或者 cv::DECOMP_CHOLESKY 如果 A_dls 总是对称正定
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-            std::cout << "IK Jacobian solve failed. Computation Time: " << duration.count() << " us" << std::endl;
-            throw ComputationFailedException("IK: Jacobian solve failed (cv::solve DECOMP_SVD).");
+            std::cout << "IK DLS Jacobian solve failed. Computation Time: " << duration.count() << " us" << std::endl;
+            throw ComputationFailedException("IK: DLS Jacobian solve failed (cv::solve).");
         }
         
         if (delta_q_mat.rows != static_cast<int>(num_joints) || delta_q_mat.cols != 1) {
@@ -335,6 +350,19 @@ std::vector<double> KinematicsSolver::computeIK(
             // std::cout << delta_q_mat.at<double>(static_cast<int>(i), 0) << (i == num_joints - 1 ? "" : ", ");
         }
         // std::cout << "]" << std::endl;
+
+        // 应用关节限位
+        if (!joint_limits.empty()) {
+            for (size_t i = 0; i < num_joints; ++i) {
+                if (q[i] < joint_limits[i].first) {
+                    q[i] = joint_limits[i].first;
+                    // std::cout << "    Joint " << i << " clamped to min: " << q[i] << std::endl;
+                } else if (q[i] > joint_limits[i].second) {
+                    q[i] = joint_limits[i].second;
+                    // std::cout << "    Joint " << i << " clamped to max: " << q[i] << std::endl;
+                }
+            }
+        }
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -369,11 +397,12 @@ cv::Matx44d KinematicsSolver::computeFK(const std::vector<double>& q_angles) { /
     }
 }
 
-// 计算关节速度以实现期望的末端执行器空间速度
+
 std::vector<double> KinematicsSolver::computeJointVelocities(
     const cv::Vec6d& V_s_desired,
-    const std::vector<double>& q_current)
-{
+    const std::vector<double>& q_current,
+    double lambda // 新增：DLS阻尼因子，默认值可以根据经验调整
+) {
     size_t num_joints = screw_vectors_space_.size();
     if (q_current.size() != num_joints) {
         throw InvalidInputException("computeJointVelocities 中当前关节角数量 (" + std::to_string(q_current.size()) +
@@ -381,59 +410,113 @@ std::vector<double> KinematicsSolver::computeJointVelocities(
     }
 
     if (num_joints == 0) {
-        // 如果没有关节，只有当期望速度（旋量）的范数接近零时才合理
         if (cv::norm(V_s_desired) < 1e-9) {
-            return {}; // 没有关节，关节速度向量为空
+            return {};
         } else {
             throw ComputationFailedException("computeJointVelocities: 无关节，但期望的末端执行器速度不为零。");
         }
     }
 
     try {
-        // 1. 计算当前关节角度下的空间雅可比矩阵 J_s(q)
         cv::Mat J_s = computeJacobianSpace(q_current);
-
-        // 2. 求解 J_s * q_dot = V_s_desired  =>  q_dot = J_s_pinv * V_s_desired
         cv::Mat q_dot_mat;
-        // 将 V_s_desired (cv::Vec6d) 转换为 cv::Mat (6x1)
         cv::Mat V_s_desired_mat(6, 1, CV_64F);
         for (int i = 0; i < 6; ++i) {
             V_s_desired_mat.at<double>(i, 0) = V_s_desired(i);
         }
 
-        // 使用 SVD 分解求解（等效于使用伪逆 J_s_pinv = (J_s^T * J_s)^-1 * J_s^T）
-        // cv::solve 对于非方阵或奇异矩阵会计算伪逆解
-        if (!cv::solve(J_s, V_s_desired_mat, q_dot_mat, cv::DECOMP_SVD)) {
-            throw ComputationFailedException("computeJointVelocities: 雅可比矩阵求解失败 (cv::solve 使用 DECOMP_SVD)。");
+        if (lambda <= 1e-9) { // 如果 lambda 接近零，使用标准伪逆 (SVD)
+            if (!cv::solve(J_s, V_s_desired_mat, q_dot_mat, cv::DECOMP_SVD)) {
+                throw ComputationFailedException("computeJointVelocities: 标准雅可比矩阵求解失败 (cv::solve 使用 DECOMP_SVD)。");
+            }
+        } else { // 使用DLS
+            cv::Mat J_s_T = J_s.t();
+            cv::Mat A_dls = J_s_T * J_s + (lambda * lambda) * cv::Mat::eye(static_cast<int>(num_joints), static_cast<int>(num_joints), CV_64F);
+            cv::Mat B_dls = J_s_T * V_s_desired_mat;
+
+            // 对于对称正定矩阵 A_dls，DECOMP_CHOLESKY 更高效，SVD更通用稳健
+            if (!cv::solve(A_dls, B_dls, q_dot_mat, cv::DECOMP_SVD)) { // 或者 cv::DECOMP_CHOLESKY
+                throw ComputationFailedException("computeJointVelocities: DLS雅可比矩阵求解失败 (cv::solve)。");
+            }
         }
 
-        // 检查 q_dot_mat 的维度是否符合预期 (num_joints x 1)
         if (q_dot_mat.rows != static_cast<int>(num_joints) || q_dot_mat.cols != 1) {
-             throw ComputationFailedException("computeJointVelocities: 计算得到的关节速度 q_dot 维度错误。期望 " +
-                                              std::to_string(num_joints) + "x1, 得到 " +
-                                              std::to_string(q_dot_mat.rows) + "x" + std::to_string(q_dot_mat.cols));
+            throw ComputationFailedException("computeJointVelocities: 计算得到的关节速度 q_dot 维度错误。期望 " +
+                                             std::to_string(num_joints) + "x1, 得到 " +
+                                             std::to_string(q_dot_mat.rows) + "x" + std::to_string(q_dot_mat.cols));
         }
 
-        // 3. 将结果从 cv::Mat 转换为 std::vector<double>
         std::vector<double> q_dot(num_joints);
         for (size_t i = 0; i < num_joints; ++i) {
             q_dot[i] = q_dot_mat.at<double>(static_cast<int>(i), 0);
         }
-
         return q_dot;
 
     } catch (const InvalidInputException& e) {
-        // 由 computeJacobianSpace 抛出，直接重新抛出
         throw;
     } catch (const cv::Exception& cv_e) {
-        // 捕获 OpenCV 相关的异常
         throw ComputationFailedException("在 computeJointVelocities 中发生 OpenCV 错误: " + std::string(cv_e.what()));
     } catch (const std::exception& std_e) {
-        // 捕获其他标准异常，例如来自 new 的 bad_alloc
-        // 检查是否已经是我们自定义的异常类型，避免重复包装或丢失原始信息
         if (dynamic_cast<const ComputationFailedException*>(&std_e) || dynamic_cast<const InvalidInputException*>(&std_e)) {
-            throw; // 如果是已定义的自定义异常，则重新抛出
+            throw;
         }
         throw ComputationFailedException("在 computeJointVelocities 中发生标准库错误: " + std::string(std_e.what()));
+    }
+}
+
+cv::Vec6d KinematicsSolver::computeEndEffectorVelocity(
+    const std::vector<double>& q_current,
+    const std::vector<double>& q_dot
+) {
+    size_t num_joints = screw_vectors_space_.size();
+    if (q_current.size() != num_joints) {
+        throw InvalidInputException("computeEndEffectorVelocity 中当前关节角数量 (" + std::to_string(q_current.size()) +
+                                    ") 与螺旋向量数量 (" + std::to_string(num_joints) + ") 不匹配。");
+    }
+    if (q_dot.size() != num_joints) {
+        throw InvalidInputException("computeEndEffectorVelocity 中关节速度数量 (" + std::to_string(q_dot.size()) +
+                                    ") 与螺旋向量数量 (" + std::to_string(num_joints) + ") 不匹配。");
+    }
+
+    if (num_joints == 0) {
+        // 没有关节，末端执行器速度始终为零
+        return cv::Vec6d(0,0,0,0,0,0);
+    }
+
+    try {
+        cv::Mat J_s = computeJacobianSpace(q_current); // 6xN
+        
+        // cv::Mat q_dot_mat(static_cast<int>(num_joints), 1, CV_64F);
+        // for (size_t i = 0; i < num_joints; ++i) {
+        //     q_dot_mat.at<double>(static_cast<int>(i), 0) = q_dot[i];
+        // }
+        cv::Mat q_dot_mat = cv::Mat(q_dot).clone();
+
+        cv::Mat V_s_mat = J_s * q_dot_mat; // (6xN) * (Nx1) = 6x1
+
+        if (V_s_mat.rows != 6 || V_s_mat.cols != 1) {
+            throw ComputationFailedException("computeEndEffectorVelocity: 计算得到的 V_s 维度错误。期望 6x1, 得到 " +
+                                             std::to_string(V_s_mat.rows) + "x" + std::to_string(V_s_mat.cols));
+        }
+
+        cv::Vec6d V_s_result;
+        // for (int i = 0; i < 6; ++i) {
+        //     V_s_result(i) = V_s_mat.at<double>(i, 0);
+        // }
+        V_s_mat.col(0).reshape(1, 6).copyTo(V_s_result); // 确保是 6x1 向量
+
+        return V_s_result;
+
+    } catch (const InvalidInputException& e) {
+        // computeJacobianSpace 可能抛出 InvalidInputException
+        throw; 
+    } catch (const cv::Exception& cv_e) {
+        throw ComputationFailedException("在 computeEndEffectorVelocity 中发生 OpenCV 错误: " + std::string(cv_e.what()));
+    } catch (const std::exception& std_e) {
+        // 捕获可能由 computeJacobianSpace 抛出的 ComputationFailedException
+        if (dynamic_cast<const ComputationFailedException*>(&std_e) || dynamic_cast<const InvalidInputException*>(&std_e)) {
+            throw;
+        }
+        throw ComputationFailedException("在 computeEndEffectorVelocity 中发生标准库错误: " + std::string(std_e.what()));
     }
 }

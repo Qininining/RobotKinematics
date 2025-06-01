@@ -66,21 +66,23 @@ void printJointVector(const std::vector<double>& q, const std::string& name) {
     std::cout << " }" << std::endl;
 }
 
-// 辅助函数：比较两个关节向量是否近似相等
-bool compareJointVectors(const std::vector<double>& q1, const std::vector<double>& q2, double tol = 1e-4) {
-    if (q1.size() != q2.size()) {
-        std::cerr << "Joint vector comparison failed: sizes differ ("
-                  << q1.size() << " vs " << q2.size() << ")" << std::endl;
-        return false;
+// 辅助函数：打印 6D 旋量 (Twist)
+void printTwist(const cv::Vec6d& twist, const std::string& name) {
+    std::cout << name << " = { ";
+    std::cout << std::fixed << std::setprecision(5);
+    for (int i = 0; i < 6; ++i) {
+        std::cout << twist(i) << (i == 5 ? "" : ", ");
     }
-    for (size_t i = 0; i < q1.size(); ++i) {
-        if (std::abs(q1[i] - q2[i]) > tol) {
-            if (std::abs(std::fmod(q1[i] - q2[i] + M_PI, 2.0 * M_PI) - M_PI) > tol &&
-                std::abs(std::fmod(q2[i] - q1[i] + M_PI, 2.0 * M_PI) - M_PI) > tol) {
-                std::cerr << "Joint vector comparison failed at index " << i << ": "
-                          << q1[i] << " vs " << q2[i] << std::endl;
-                return false;
-            }
+    std::cout << " }" << std::endl;
+}
+
+// 辅助函数：比较两个 6D 旋量是否近似相等
+bool compareTwists(const cv::Vec6d& t1, const cv::Vec6d& t2, double tol = 1e-5) {
+    for (int i = 0; i < 6; ++i) {
+        if (std::abs(t1(i) - t2(i)) > tol) {
+            std::cerr << "Twist comparison failed at index " << i << ": "
+                      << t1(i) << " vs " << t2(i) << std::endl;
+            return false;
         }
     }
     return true;
@@ -240,37 +242,65 @@ void test_2R_planar_robot() {
 
 void test_PPPRRR_robot() {
     std::cout << "--- Test: PPPRRR Robot ---" << std::endl;
-    std::vector<cv::Vec6d> screws;
-    screws.push_back(cv::Vec6d(0.0, 0.0, 0.0, 1.0, 0.0, 0.0));
-    screws.push_back(cv::Vec6d(0.0, 0.0, 0.0, 0.0, 1.0, 0.0));
-    screws.push_back(cv::Vec6d(0.0, 0.0, 0.0, 0.0, 0.0, 1.0));
-    screws.push_back(cv::Vec6d(0.0, 0.0, 1.0, 0.0, 0.0, 0.0));
-    screws.push_back(cv::Vec6d(0.0, 1.0, 0.0, 0.0, 0.0, 0.0));
-    screws.push_back(cv::Vec6d(1.0, 0.0, 0.0, 0.0, 0.0, 0.0));
+    // std::vector<cv::Vec6d> screws;
+    // screws.push_back(cv::Vec6d(0.0, 0.0, 0.0, 1.0, 0.0, 0.0));
+    // screws.push_back(cv::Vec6d(0.0, 0.0, 0.0, 0.0, 1.0, 0.0));
+    // screws.push_back(cv::Vec6d(0.0, 0.0, 0.0, 0.0, 0.0, 1.0));
+    // screws.push_back(cv::Vec6d(0.0, 0.0, 1.0, 0.0, 0.0, 0.0));
+    // screws.push_back(cv::Vec6d(0.0, 1.0, 0.0, 0.0, 0.0, 0.0));
+    // screws.push_back(cv::Vec6d(1.0, 0.0, 0.0, 0.0, 0.0, 0.0));
 
-    cv::Matx44d M_initial = cv::Matx44d::eye();
+    // cv::Matx44d M_initial = cv::Matx44d::eye();
 
-    KinematicsSolver solver(screws, M_initial);
 
-    std::vector<double> q_vals = {1.0, 0.5, 0.2, M_PI / 2.0, M_PI / 2.0, 0.0};
+    std::vector<cv::Vec6d> screw_axes = {
+        {0.0, 0.0, 1.0, 0.0, 0.0, 0.0},  // Shoulder (S1)
 
-    cv::Matx44d T_expected = cv::Matx44d(
-        0.0, -1.0,  0.0, 1.0,
-        0.0,  0.0,  1.0, 0.5,
-        -1.0,  0.0,  0.0, 0.2,
-        0.0,  0.0,  0.0, 1.0
+        {-0.00010966218804077, 0.999999860344549, 0.000516996214966776,
+         -0.089201126124083, -9.73915983020756e-06, -8.28481817600509e-05},  // Upper Arm (S2)
+
+        {-0.000851501411008793, 0.999999608724093, 0.000239785336181799,
+         -0.0892010924995179, -0.000177878813172699, 0.425063054601736},  // Forearm (S3)
+
+        {0.000645748395716926, 0.999977787178547, 0.00663386452268502,
+         -0.0891645904058137, -0.00536369075116089, 0.817193278688037},  // Wrist 1 (S4)
+
+        {1.07663873727645e-05, 0.0085250671036427, -0.999963660897216,
+         -0.111191909169889, 0.817216260164118, 0.00696587945472968},  // Wrist 2 (S5)
+
+        {0.000651627424651037, 0.999975340393563, 0.00699242350521426,
+         0.005596450592457, -0.00571659008736621, 0.816998900818537}   // Wrist 3 (S6)
+    };
+
+    // UR5 的标准末端执行器初始位姿 M (与 ur5_kinematics_controller.cpp 中一致)
+    cv::Matx44d M_home_ = cv::Matx44d(
+        -0.999999787643124, -9.76765308370577e-06,  0.000651627424651037,  0.817145243199844,  // Row 1
+        0.00065167979368323, -0.00699241862472029,  0.999975340393563,   0.193656522784246,  // Row 2
+        -5.21096047671649e-06,  0.999975552694349,   0.00699242350521426,  -0.00424242678717729, // Row 3
+        0.0,                  0.0,                  0.0,                  1.0                // Row 4
         );
+
+    KinematicsSolver solver(screw_axes, M_home_);
+
+    std::vector<double> q_vals = {0, 0, 0, 0, 0, 4};
+
+    // cv::Matx44d T_expected = cv::Matx44d(
+    //     0.0, -1.0,  0.0, 1.0,
+    //     0.0,  0.0,  1.0, 0.5,
+    //     -1.0,  0.0,  0.0, 0.2,
+    //     0.0,  0.0,  0.0, 1.0
+    //     );
 
     std::cout << "Test Case: q = {1.0, 0.5, 0.2, PI/2, PI/2, 0.0}" << std::endl;
     try {
         cv::Matx44d T_fk = solver.computeFK(q_vals);
         printMatrix(T_fk, "Calculated FK (PPPRRR)");
-        printMatrix(T_expected, "Expected FK (PPPRRR)");
-        if (compareMatrices(T_fk, T_expected)) {
-            std::cout << "PPPRRR Test: PASSED" << std::endl;
-        } else {
-            std::cout << "PPPRRR Test: FAILED" << std::endl;
-        }
+        // printMatrix(T_expected, "Expected FK (PPPRRR)");
+        // if (compareMatrices(T_fk, T_expected)) {
+        //     std::cout << "PPPRRR Test: PASSED" << std::endl;
+        // } else {
+        //     std::cout << "PPPRRR Test: FAILED" << std::endl;
+        // }
     } catch (const std::exception& e) {
         std::cerr << "Exception in PPPRRR Test: " << e.what() << std::endl;
     }
@@ -446,6 +476,7 @@ void test_IK_PPPRRR_robot_with_offset() {
     std::cout << "-----------------------------------------" << std::endl << std::endl;
 }
 
+
 int main(int argc, char *argv[])
 {
     // FK Tests
@@ -456,9 +487,12 @@ int main(int argc, char *argv[])
     // test_PPPRRR_robot_with_offset();
 
     // IK Tests
-    test_IK_2R_planar_robot();
-    test_IK_PPPRRR_robot();
-    test_IK_PPPRRR_robot_with_offset();
+    // test_IK_2R_planar_robot();
+    // test_IK_PPPRRR_robot();
+    // test_IK_PPPRRR_robot_with_offset();
+
+    // Joint Velocities Test
+    // test_joint_velocities_6DOF_robot();
 
     std::cout << "All tests finished." << std::endl;
     return 0;

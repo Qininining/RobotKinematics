@@ -55,6 +55,8 @@ public:
      * @param q_initial_guess 关节角度的初始猜测。
      * @param tolerance 收敛容差 (基于误差旋量的范数)。
      * @param max_iterations 最大迭代次数。
+     * @param joint_limits 可选的关节限位，每个关节的最小和最大角度。
+     * @param lambda Damped Least Squares (DLS) 阻尼因子，默认为 0.1。
      * @return 计算得到的关节角度向量。
      * @throws ComputationFailedException 如果IK未能收敛或发生计算错误。
      * @throws InvalidInputException 如果初始猜测的大小与螺旋向量数量不匹配。
@@ -63,7 +65,10 @@ public:
         const cv::Matx44d& T_target,
         const std::vector<double>& q_initial_guess,
         double tolerance = 1e-6,
-        int max_iterations = 100);
+        int max_iterations = 100,
+        const std::vector<std::pair<double, double>>& joint_limits = {}, // Added default value
+        double lambda = 0.1                                        // Added with default
+    );
 
     /**
      * @brief 计算关节速度以实现期望的末端执行器空间速度。
@@ -76,7 +81,23 @@ public:
      */
     std::vector<double> computeJointVelocities(
         const cv::Vec6d& V_s_desired,
-        const std::vector<double>& q_current);
+        const std::vector<double>& q_current,
+        double lambda = 0.1 // 新增：DLS阻尼因子，默认值可以根据经验调整
+    );
+
+    /**
+     * @brief 计算末端执行器的空间速度。
+     *        V_s = J_s(q) * q_dot
+     * @param q_current 当前的关节角度向量。
+     * @param q_dot 当前的关节速度向量。
+     * @return 末端执行器的 6D 空间速度 (omega_x, omega_y, omega_z, v_x, v_y, v_z)。
+     * @throws InvalidInputException 如果 q_current 或 q_dot 的大小与螺旋向量数量不匹配。
+     * @throws ComputationFailedException 如果发生计算错误。
+     */
+    cv::Vec6d computeEndEffectorVelocity(
+        const std::vector<double>& q_current,
+        const std::vector<double>& q_dot
+    );
 
 private:
     std::vector<cv::Vec6d> screw_vectors_space_; ///< 存储空间系下的螺旋向量
@@ -116,7 +137,7 @@ private:
 
     /**
      * @brief 计算齐次变换矩阵的矩阵对数，得到对应的空间旋量。
-     * @param T 4x4 齐次变换矩阵。
+     * @param T 4x4 齊次變換矩陣。
      * @return 6D 空间旋量向量 (omega_x, omega_y, omega_z, v_x, v_y, v_z)。
      * @throws ComputationFailedException 如果无法计算矩阵对数。
      */
@@ -124,7 +145,7 @@ private:
 
     /**
      * @brief 计算变换矩阵的伴随表示。
-     * @param T 4x4 齐次变换矩阵。
+     * @param T 4x4 齊次變換矩陣。
      * @return 6x6 伴随矩阵。
      */
     cv::Matx66d adjoint(const cv::Matx44d& T);
