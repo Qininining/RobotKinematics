@@ -99,9 +99,7 @@ public:
         const std::vector<double>& q_dot
     );
 
-private:
-    std::vector<cv::Vec6d> screw_vectors_space_; ///< 存储空间系下的螺旋向量
-    cv::Matx44d M_initial_;                     ///< 初始位姿矩阵
+
 
     /**
      * @brief 计算一个三维向量的反对称矩阵（即 skew-symmetric matrix）。
@@ -149,6 +147,10 @@ private:
      * @return 6x6 伴随矩阵。
      */
     cv::Matx66d adjoint(const cv::Matx44d& T);
+
+private:
+    std::vector<cv::Vec6d> screw_vectors_space_; ///< 存储空间系下的螺旋向量
+    cv::Matx44d M_initial_;                     ///< 初始位姿矩阵
 };
 
 #endif // KINEMATICSSOLVER_H
