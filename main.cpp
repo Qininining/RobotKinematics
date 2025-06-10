@@ -612,6 +612,14 @@ void test_joint_and_effector_velocities_UR5() {
     double lambda_dls = 0.00; // DLS 阻尼因子
 
     try {
+        cv::Mat J_s =  solver.computeJacobianSpace(q_current); // 计算雅可比矩阵
+        std::cout << "Jacobian Matrix (J_s):" << std::endl;
+        std::cout << J_s << std::endl;
+
+        bool isSingular = solver.isSingular(J_s);
+        std::cout << "Is Jacobian Singular? " << (isSingular ? "Yes" : "No") << std::endl;
+
+
         // 1. 计算关节速度 q_dot
         std::vector<double> q_dot_calculated = solver.computeJointVelocities(V_s_desired, q_current, lambda_dls);
         printJointVector(q_dot_calculated, "Calculated Joint Velocities (q_dot_calculated)");
